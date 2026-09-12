@@ -1,0 +1,358 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Initialize the Node.js + TypeScript project and self-contained packaging": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065109889
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065117150
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065312300
+      }
+    ],
+    "1.2 Define shared domain types and error taxonomy classes": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065109950
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065317638
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065555120
+      }
+    ],
+    "2.1 Implement the environment-only Config loader": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065109993
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065561344
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065721827
+      }
+    ],
+    "3.1 Implement redaction-aware logger and pure helpers": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110035
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065562230
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065722577
+      }
+    ],
+    "4.1 Implement persistent context launch and sensitive user-data-dir handling": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110123
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065729251
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065848013
+      }
+    ],
+    "4.2 Implement in-page fetch (the auth mechanism)": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110163
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065858594
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066000693
+      }
+    ],
+    "4.4 Implement session probe, MyApps login flow, and readiness": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110204
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066004558
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066161974
+      }
+    ],
+    "4.6 Implement the serialized request queue over the shared page": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110249
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066164752
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066261255
+      }
+    ],
+    "5.1 Implement result normalization": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110301
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066269308
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066395340
+      }
+    ],
+    "5.3 Implement mode resolution": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110424
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066398139
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066512038
+      }
+    ],
+    "5.5 Implement oneshot and async job creation with session-guarded POST": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110468
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066514976
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066657160
+      }
+    ],
+    "5.6 Implement poll-with-backoff and async completion": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110512
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066661476
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066826472
+      }
+    ],
+    "5.8 Implement status, paged results, and cancel": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110556
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066829511
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066974508
+      }
+    ],
+    "5.9 Implement whoami and server-info probes": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110599
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066977398
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067090472
+      }
+    ],
+    "6.1 Implement the six MCP tools and argument validation": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110686
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067095968
+      }
+    ],
+    "6.2 Wire the server entrypoint over stdio": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110751
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067438742
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067596717
+      }
+    ],
+    "6.3 Implement error-taxonomy mapping into MCP responses": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110804
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067285138
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067435249
+      }
+    ],
+    "7. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110852
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067600966
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067609739
+      }
+    ],
+    "9. Final checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065110898
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067614214
+      },
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067624902
+      }
+    ],
+    "1. Project scaffolding and shared types": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065555174
+      }
+    ],
+    "2. Configuration loader": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065721918
+      }
+    ],
+    "3. Secret-safe logging and helpers": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789065722694
+      }
+    ],
+    "4. SessionManager: browser, in-page fetch, auth, concurrency": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789066261318
+      }
+    ],
+    "5. SplunkClient: search lifecycle and normalization": [
+      {
+        "executionId": "9bbc035e-3e69-48c1-ac6d-dd99493fe9a0",
+        "chatSessionId": "sess_6d2b9a04-ba20-4df7-811a-9d63e3a52769",
+        "timestamp": 1789067090571
+      }
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "splunk-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-contained Node.js MCP server that runs Splunk searches against a Splunk Cloud deployment using a browser-managed Entra SSO session (in-page fetch model).",
+  "type": "module",
+  "bin": {
+    "splunk-mcp-server": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "install:chromium": "playwright install chromium",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "playwright": "1.63.0",
+    "zod": "4.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "fast-check": "4.9.0",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

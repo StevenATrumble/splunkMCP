@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "disabled": false
+    },
+    "splunk": {
+      "command": "node",
+      "args": [
+        "dist/server.js"
+      ],
+      "env": {
+        "SPLUNK_BASE_URL": "https://hoopp.splunkcloud.com",
+        "SPLUNK_APP": "search"
+      },
+      "disabled": false
+    }
+  }
+}
