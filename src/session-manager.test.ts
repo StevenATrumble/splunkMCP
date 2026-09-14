@@ -18,7 +18,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext, Page } from "playwright";
 
 import type { Config } from "./config.js";
+import { TransportError } from "./errors.js";
 import {
+  MissingCsrfTokenError,
   SessionManager,
   type CdpEndpointInfo,
   type EndpointFileIo,
@@ -31,12 +33,39 @@ import {
 interface FakePage {
   url: () => string;
   goto: ReturnType<typeof vi.fn>;
+  /** Liveness signal read by SessionManager.isBrowserLive/fetchJsonUnqueued. */
+  isClosed: () => boolean;
+  /** In-page fetch seam; controllable so tests can simulate transport failure. */
+  evaluate: ReturnType<typeof vi.fn>;
+  /** Mark this fake page closed so isClosed() reports it as dead. */
+  _markClosed: () => void;
 }
 
-function makePage(url: string): FakePage {
+/**
+ * Build a fake Page. Defaults to "live" (not closed) and an `evaluate` that
+ * returns a healthy 200/JSON raw fetch result, so existing tests are
+ * unaffected. Pass `evaluate` to control the in-page fetch result per test.
+ */
+function makePage(
+  url: string,
+  evaluate?: ReturnType<typeof vi.fn>,
+): FakePage {
+  let closed = false;
   return {
     url: () => url,
     goto: vi.fn(async () => null),
+    isClosed: () => closed,
+    evaluate:
+      evaluate ??
+      vi.fn(async () => ({
+        status: 200,
+        redirected: false,
+        text: "{}",
+        csrfMissing: false,
+      })),
+    _markClosed: () => {
+      closed = true;
+    },
   };
 }
 
@@ -70,12 +99,21 @@ interface FakeBrowser {
   contexts: () => FakeContext[];
   close: ReturnType<typeof vi.fn>;
   wsEndpoint?: () => string;
+  /** Connection liveness read by SessionManager.isBrowserLive. */
+  isConnected: () => boolean;
+  /** Mark this fake browser disconnected so isConnected() reports it dead. */
+  _markDisconnected: () => void;
 }
 
 function makeBrowser(contexts: FakeContext[], wsEndpoint?: string): FakeBrowser {
+  let connected = true;
   const browser: FakeBrowser = {
     contexts: () => contexts,
     close: vi.fn(async () => undefined),
+    isConnected: () => connected,
+    _markDisconnected: () => {
+      connected = false;
+    },
   };
   if (wsEndpoint !== undefined) {
     browser.wsEndpoint = () => wsEndpoint;
@@ -395,5 +433,235 @@ describe("SessionManager launch(): attach-first / launch-on-miss", () => {
     await session.close();
     await expect(session.close()).resolves.toBeUndefined();
     expect(context.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Self-healing recovery: a dead/wedged browser is transparently re-attached or
+// relaunched before the next request, which is then retried exactly once.
+// ---------------------------------------------------------------------------
+
+/**
+ * An `evaluate` seam returning a healthy 200/JSON raw fetch result — the shape
+ * fetchJsonUnqueued expects back from `page.evaluate`.
+ */
+function healthyEvaluate(): ReturnType<typeof vi.fn> {
+  return vi.fn(async () => ({
+    status: 200,
+    redirected: false,
+    text: "{}",
+    csrfMissing: false,
+  }));
+}
+
+describe("SessionManager self-healing recovery", () => {
+  it("recovers by relaunching when the page has closed", async () => {
+    const userDataDir = await makeTempUserDataDir();
+
+    // First owner page: healthy fetch, but we mark it closed after launch to
+    // simulate the window being closed/crashing.
+    const deadPage = makePage(`${BASE_URL}/en-US/app/search/search`);
+    const deadContext = makeContext({ pages: [deadPage] });
+
+    // Second (recovered) owner page: a fresh live page that answers healthily.
+    const livePage = makePage(`${BASE_URL}/en-US/app/search/search`);
+    const liveContext = makeContext({ pages: [livePage] });
+
+    const launchPersistentContext = vi
+      .fn()
+      .mockResolvedValueOnce(deadContext as unknown as BrowserContext)
+      .mockResolvedValueOnce(liveContext as unknown as BrowserContext);
+    // No handshake ever present → recovery relaunches (owner path).
+    const endpoint = makeEndpointFile(undefined);
+    const connectOverCDP = vi.fn();
+
+    const session = new SessionManager(makeConfig({ userDataDir }), {
+      ensureChromium: async () => undefined,
+      launchPersistentContext: launchPersistentContext as never,
+      connectOverCDP: connectOverCDP as never,
+      endpointFile: endpoint.io,
+      resolveWsEndpoint: (async () => undefined) as never,
+    });
+
+    await session.launch();
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+
+    // Window closes: the primary page is now dead.
+    deadPage._markClosed();
+
+    const resp = await session.fetchJson({ method: "GET", path: "x" });
+
+    expect(resp.status).toBe(200);
+    // Re-acquisition relaunched a fresh owner (no CDP handshake to attach to).
+    expect(launchPersistentContext).toHaveBeenCalledTimes(2);
+    expect(connectOverCDP).not.toHaveBeenCalled();
+    // The recovered live page served the retried call.
+    expect(livePage.evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers by re-attaching when a handshake is present", async () => {
+    // Owner launches first, then the page dies; a handshake exists so recovery
+    // attaches over CDP rather than relaunching.
+    const userDataDir = await makeTempUserDataDir();
+
+    const deadPage = makePage(`${BASE_URL}/en-US/app/search/search`);
+    const deadContext = makeContext({ pages: [deadPage] });
+
+    const attachedPage = makePage(`${BASE_URL}/en-US/app/search/search`);
+    const attachedContext = makeContext({ pages: [attachedPage] });
+    const attachedBrowser = makeBrowser([attachedContext]);
+
+    const endpoint = makeEndpointFile(undefined);
+    const launchPersistentContext = vi.fn(
+      async () => deadContext as unknown as BrowserContext,
+    );
+    const connectOverCDP = vi.fn(
+      async () => attachedBrowser as unknown as Browser,
+    );
+
+    const session = new SessionManager(makeConfig({ userDataDir }), {
+      ensureChromium: async () => undefined,
+      launchPersistentContext: launchPersistentContext as never,
+      connectOverCDP: connectOverCDP as never,
+      endpointFile: endpoint.io,
+      // Owner launch publishes a handshake; recovery then reads it and attaches.
+      resolveWsEndpoint: (async () =>
+        "ws://127.0.0.1:9223/devtools/browser/live") as never,
+    });
+
+    await session.launch();
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+    // A handshake was published by the owner launch.
+    expect(endpoint.current()).toBeDefined();
+
+    // Window dies.
+    deadPage._markClosed();
+
+    const resp = await session.fetchJson({ method: "GET", path: "x" });
+
+    expect(resp.status).toBe(200);
+    // Recovery attached over CDP (handshake present) rather than relaunching.
+    expect(connectOverCDP).toHaveBeenCalledTimes(1);
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+    expect(attachedPage.evaluate).toHaveBeenCalledTimes(1);
+
+    // Attached (non-owning): close disconnects, never tears down the context.
+    await session.close();
+    expect(attachedBrowser.close).toHaveBeenCalledTimes(1);
+    expect(attachedContext.close).not.toHaveBeenCalled();
+  });
+
+  it("retries a transport failure exactly once, then rejects", async () => {
+    const userDataDir = await makeTempUserDataDir();
+
+    // A live page whose evaluate always throws → a persistent transport error.
+    const failingEvaluate = vi.fn(async () => {
+      throw new Error("browser automation exploded");
+    });
+    const page = makePage(
+      `${BASE_URL}/en-US/app/search/search`,
+      failingEvaluate,
+    );
+    const context = makeContext({ pages: [page] });
+
+    const launchPersistentContext = vi.fn(
+      async () => context as unknown as BrowserContext,
+    );
+    const endpoint = makeEndpointFile(undefined);
+
+    const session = new SessionManager(makeConfig({ userDataDir }), {
+      ensureChromium: async () => undefined,
+      launchPersistentContext: launchPersistentContext as never,
+      endpointFile: endpoint.io,
+      resolveWsEndpoint: (async () => undefined) as never,
+    });
+
+    await session.launch();
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+
+    await expect(
+      session.fetchJson({ method: "GET", path: "x" }),
+    ).rejects.toThrow(TransportError);
+
+    // Exactly two attempts: the original + one retry. Not a loop.
+    expect(failingEvaluate).toHaveBeenCalledTimes(2);
+    // The page stayed live throughout (isClosed false), so recovery did not
+    // relaunch — acquisition was bounded to the initial launch.
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recover or retry on a non-transport error", async () => {
+    const userDataDir = await makeTempUserDataDir();
+
+    // Simulate a state-changing request with no readable CSRF token: the
+    // in-page fetch reports csrfMissing, which fetchJsonUnqueued maps to a
+    // MissingCsrfTokenError (not a transport failure).
+    const csrfMissingEvaluate = vi.fn(async () => ({
+      status: 0,
+      redirected: false,
+      text: "",
+      csrfMissing: true,
+    }));
+    const page = makePage(
+      `${BASE_URL}/en-US/app/search/search`,
+      csrfMissingEvaluate,
+    );
+    const context = makeContext({ pages: [page] });
+
+    const launchPersistentContext = vi.fn(
+      async () => context as unknown as BrowserContext,
+    );
+    const endpoint = makeEndpointFile(undefined);
+
+    const session = new SessionManager(makeConfig({ userDataDir }), {
+      ensureChromium: async () => undefined,
+      launchPersistentContext: launchPersistentContext as never,
+      endpointFile: endpoint.io,
+      resolveWsEndpoint: (async () => undefined) as never,
+    });
+
+    await session.launch();
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+
+    await expect(
+      session.fetchJson({ method: "POST", path: "x", body: { a: "b" } }),
+    ).rejects.toThrow(MissingCsrfTokenError);
+
+    // No retry for a non-transport error.
+    expect(csrfMissingEvaluate).toHaveBeenCalledTimes(1);
+    // No re-acquisition.
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("live browser is a no-op: a normal request does not re-acquire", async () => {
+    const userDataDir = await makeTempUserDataDir();
+
+    const page = makePage(`${BASE_URL}/en-US/app/search/search`);
+    const context = makeContext({ pages: [page] });
+
+    const launchPersistentContext = vi.fn(
+      async () => context as unknown as BrowserContext,
+    );
+    const connectOverCDP = vi.fn();
+    const endpoint = makeEndpointFile(undefined);
+
+    const session = new SessionManager(makeConfig({ userDataDir }), {
+      ensureChromium: async () => undefined,
+      launchPersistentContext: launchPersistentContext as never,
+      connectOverCDP: connectOverCDP as never,
+      endpointFile: endpoint.io,
+      resolveWsEndpoint: (async () => undefined) as never,
+    });
+
+    await session.launch();
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+
+    const resp = await session.fetchJson({ method: "GET", path: "x" });
+    expect(resp.status).toBe(200);
+
+    // Live fast-path: ensureLive did not re-acquire.
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+    expect(connectOverCDP).not.toHaveBeenCalled();
+    expect(page.evaluate).toHaveBeenCalledTimes(1);
   });
 });

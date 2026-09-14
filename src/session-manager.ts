@@ -411,6 +411,14 @@ export class SessionManager {
    */
   private pumping = false;
 
+  /**
+   * Single-flight guard for self-healing recovery ({@link ensureLive}). When a
+   * recovery (re-attach or relaunch) is in progress, this holds its promise so
+   * concurrent callers await the same recovery rather than starting a second
+   * competing attach/launch. Cleared once the recovery settles.
+   */
+  private recovering: Promise<void> | undefined;
+
   constructor(config: Config, deps: SessionManagerDeps = {}) {
     this.config = config;
     this.log = deps.logger ?? logger;
@@ -459,7 +467,24 @@ export class SessionManager {
     if (this.context) {
       return;
     }
+    await this.acquire();
+  }
 
+  /**
+   * Acquire a live browser context + primary page, becoming either an attached
+   * (reuse) session or the owner. This is the body of {@link launch} after its
+   * idempotent guard, factored out so {@link ensureLive} can re-run the exact
+   * same acquisition path after a dead browser has been reset. Callers are
+   * responsible for the "already have a context" short-circuit ({@link launch})
+   * or for clearing dead state before calling ({@link ensureLive}).
+   *
+   * Order of operations matters for the guards:
+   * 1. Verify Chromium is installed (Req 17.4) — abort before securing the dir
+   *    or launching anything.
+   * 2. Attach-first: adopt an already-running reusable browser if present.
+   * 3. On a miss, launch a fresh owner (which secures the dir, Req 16.x).
+   */
+  private async acquire(): Promise<void> {
     // Req 17.4: never launch a context when Chromium is missing.
     await this.ensureChromium();
 
@@ -471,6 +496,132 @@ export class SessionManager {
     }
 
     await this.launchOwned();
+  }
+
+  /**
+   * Whether the browser and primary page are currently alive and usable.
+   *
+   * Self-healing recovery (see {@link ensureLive}) keys on this: when a headful
+   * window is closed/crashes or the CDP connection drops, this returns `false`
+   * so the next request transparently re-attaches or relaunches instead of
+   * failing forever with a {@link TransportError}.
+   *
+   * Detection is purely from Playwright liveness signals and is defensive — any
+   * thrown access is treated as "not live":
+   * - No context or no primary page → not live.
+   * - `primaryPage.isClosed()` true → not live (the tab/window is gone).
+   * - Attached sessions: `attachedBrowser.isConnected()` false → not live (the
+   *   CDP connection to the shared browser dropped).
+   * - Owner sessions: `context.browser().isConnected()` false → not live. A
+   *   persistent context may expose a `null` browser; that cannot confirm death
+   *   so we do not treat it as dead (page.isClosed already covers the tab).
+   */
+  private isBrowserLive(): boolean {
+    try {
+      const context = this.context;
+      const page = this.primaryPage;
+      if (!context || !page) {
+        return false;
+      }
+
+      // The tab/window is gone.
+      if (page.isClosed?.() === true) {
+        return false;
+      }
+
+      // Attached (reuse) session: the CDP connection to the shared browser is
+      // the authoritative liveness signal.
+      const attached = this.attachedBrowser;
+      if (attached && attached.isConnected?.() === false) {
+        return false;
+      }
+
+      // Owner session: the launched browser's connection. `browser()` may be
+      // null for a persistent context — a null cannot confirm death, so only a
+      // definite `isConnected() === false` counts as dead here.
+      const ownerBrowser = context.browser?.();
+      if (ownerBrowser && ownerBrowser.isConnected?.() === false) {
+        return false;
+      }
+
+      return true;
+    } catch {
+      // Any thrown access to a torn-down handle means it is not live.
+      return false;
+    }
+  }
+
+  /**
+   * Ensure a live browser + page exist, transparently recovering a dead/wedged
+   * session before it is used. This is the self-healing entry point the request
+   * pump calls ahead of every in-page fetch.
+   *
+   * Fast path: when {@link isBrowserLive} is true this is a no-op (the common
+   * case), so live requests pay no recovery cost.
+   *
+   * Recovery path: when the browser is not live, the dead handles are reset
+   * WITHOUT calling {@link close} on them (close() has owner/attached teardown
+   * semantics we must not run against already-dead objects; a dead attached
+   * browser is best-effort disconnected but never allowed to throw). We then
+   * re-run the same acquisition path {@link launch} uses via {@link acquire},
+   * which will re-attach over CDP if a handshake is present, else relaunch a
+   * fresh owner.
+   *
+   * This re-establishes a live *page*, not a live *session*: it uses the
+   * launch/attach primitives directly and never enqueues through
+   * {@link fetchJson}, so it cannot deadlock the serialized pump. Session
+   * liveness/login stays with the existing `postWithSessionGuard`/
+   * {@link ensureReady} flow at the SplunkClient layer.
+   *
+   * Concurrency: a single-flight {@link recovering} promise coalesces
+   * concurrent callers (e.g. overlapping pump iterations) onto one recovery so
+   * we never attach/launch twice in parallel.
+   */
+  private async ensureLive(): Promise<void> {
+    if (this.isBrowserLive()) {
+      return;
+    }
+
+    // Single-flight: if a recovery is already running, share it rather than
+    // starting a competing attach/launch.
+    if (this.recovering) {
+      await this.recovering;
+      return;
+    }
+
+    this.recovering = this.recover();
+    try {
+      await this.recovering;
+    } finally {
+      this.recovering = undefined;
+    }
+  }
+
+  /**
+   * Reset dead browser state and re-acquire a live context + page. Only called
+   * by {@link ensureLive} under the single-flight guard.
+   */
+  private async recover(): Promise<void> {
+    this.log.info(
+      "Browser session was not live; recovering (re-attach or relaunch)",
+    );
+
+    // Best-effort dispose of a dead attached CDP connection without letting it
+    // throw. We do NOT call close() (its owner/attached teardown must not run
+    // against already-dead handles); we just drop our references.
+    const deadAttached = this.attachedBrowser;
+    this.context = undefined;
+    this.primaryPage = undefined;
+    this.attachedBrowser = undefined;
+    this.owning = false;
+    if (deadAttached) {
+      await deadAttached.close().catch(() => {
+        /* best-effort: the connection is already gone */
+      });
+    }
+
+    // Re-run the same acquisition path launch() uses (attach-first, then own).
+    await this.acquire();
   }
 
   /**
@@ -1173,20 +1324,9 @@ export class SessionManager {
     this.pumping = true;
     try {
       while (this.queue.length > 0) {
-        // Req 18.3: if the page is gone, fail the remaining queue instead of
-        // attempting a call that cannot run.
-        if (!this.primaryPage) {
-          this.drainQueue(
-            new TransportError(
-              "Browser page is not available; the queued REST call was not executed.",
-            ),
-          );
-          break;
-        }
-
         const entry = this.queue.shift()!;
         try {
-          const response = await this.fetchJsonUnqueued(entry.req);
+          const response = await this.runWithRecovery(entry.req);
           entry.resolve(response);
         } catch (error) {
           // Deliver the per-call error to only this caller (Req 8.4/8.7) and
@@ -1199,8 +1339,48 @@ export class SessionManager {
     }
     // A queued item may have been added between the loop exit and clearing the
     // flag (e.g. from within a caller's continuation). Ensure it is serviced.
-    if (this.queue.length > 0 && this.primaryPage) {
+    if (this.queue.length > 0) {
       void this.pump();
+    }
+  }
+
+  /**
+   * Execute one queued REST call with transparent self-healing recovery and a
+   * single retry (self-healing browser recovery).
+   *
+   * Flow for each call:
+   * 1. {@link ensureLive} first, so a dead/wedged browser is re-attached or
+   *    relaunched BEFORE the fetch (a no-op fast path when already live).
+   * 2. Run {@link fetchJsonUnqueued}. On success, return.
+   * 3. If it throws a {@link TransportError} (the dead-page signal) and we have
+   *    not already retried, force recovery via {@link ensureLive} again and
+   *    retry the SAME fetch exactly once. If the retry also fails, propagate.
+   * 4. A non-{@link TransportError} (e.g. {@link MissingCsrfTokenError}) is not
+   *    a browser-death condition — it propagates immediately with no recovery
+   *    or retry.
+   *
+   * Recovery uses the launch/attach primitives directly (never {@link fetchJson}),
+   * so it cannot re-enter or deadlock the serialized pump; the queue stays
+   * at-most-one-in-flight and a per-call failure after the single retry rejects
+   * only that caller.
+   */
+  private async runWithRecovery(
+    req: RawRestRequest,
+  ): Promise<RawRestResponse> {
+    // Recover a dead browser before the call (fast no-op when already live).
+    await this.ensureLive();
+    try {
+      return await this.fetchJsonUnqueued(req);
+    } catch (error) {
+      if (!(error instanceof TransportError)) {
+        // Not a browser-death condition (e.g. missing CSRF): deliver as-is.
+        throw error;
+      }
+      // Transport failure: the page may have died mid-call. Force one recovery
+      // + retry. isBrowserLive() likely reports the wedged page as dead now, so
+      // ensureLive() re-acquires; then retry the same fetch exactly once.
+      await this.ensureLive();
+      return await this.fetchJsonUnqueued(req);
     }
   }
 
@@ -1255,6 +1435,15 @@ export class SessionManager {
       // transport-layer failure, not a Splunk-side one (Requirement 8.7).
       throw new TransportError(
         "Browser page is not available; the session has not been launched.",
+      );
+    }
+
+    // A closed page is a dead-page signal: surface it as a TransportError so
+    // the recovery/retry path (runWithRecovery) triggers cleanly rather than
+    // letting page.evaluate throw an opaque error first (Requirement 8.7).
+    if (page.isClosed?.() === true) {
+      throw new TransportError(
+        `In-page fetch failed for ${req.method} ${req.path}: the page is closed.`,
       );
     }
 
