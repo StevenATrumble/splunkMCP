@@ -75,22 +75,68 @@ npm start          # runs dist/server.js over the MCP stdio transport
 
 The server is configured entirely through environment variables (no config
 files). All values have documented defaults except where noted; see the design
-document for the full list. Example MCP client (`mcp.json`) entry:
+document for the full list. The most common variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SPLUNK_BASE_URL` | `https://hoopp.splunkcloud.com` | Splunk Cloud base URL |
+| `SPLUNK_APP` | `search` | Namespace app |
+| `SPLUNK_USERNAME` | *(optional)* | Not required — the non-namespaced `services/search/...` path is used |
+
+### Configure in Kiro (mcp.json)
+
+Add the server to your Kiro MCP config. Kiro reads two config files and merges
+them (workspace overrides user):
+
+- **User level** (applies to all workspaces):
+  - Windows: `%USERPROFILE%\.kiro\settings\mcp.json` (e.g. `C:\Users\<you>\.kiro\settings\mcp.json`)
+  - macOS / Linux: `~/.kiro/settings/mcp.json`
+- **Workspace level** (this project only): `.kiro/settings/mcp.json` in the workspace root.
+
+Use an **absolute path** to the built `dist/server.js` (relative paths only work
+when Kiro's working directory is the workspace root). On Windows, escape
+backslashes in JSON (`\\`), or use forward slashes:
 
 ```json
 {
   "mcpServers": {
     "splunk": {
       "command": "node",
-      "args": ["<path>/dist/server.js"],
+      "args": ["C:\\Users\\<you>\\dev\\splunkMCP\\dist\\server.js"],
       "env": {
         "SPLUNK_BASE_URL": "https://hoopp.splunkcloud.com",
         "SPLUNK_APP": "search"
-      }
+      },
+      "disabled": false
     }
   }
 }
 ```
+
+macOS / Linux path form:
+
+```json
+{
+  "mcpServers": {
+    "splunk": {
+      "command": "node",
+      "args": ["/Users/<you>/dev/splunkMCP/dist/server.js"],
+      "env": {
+        "SPLUNK_BASE_URL": "https://hoopp.splunkcloud.com",
+        "SPLUNK_APP": "search"
+      },
+      "disabled": false
+    }
+  }
+}
+```
+
+**Setup order matters:** `dist/server.js` only exists after you build. Run
+`npm install` (pulls Chromium via postinstall) and `npm run build` first, then
+point `mcp.json` at the absolute path to `dist/server.js` and reload the MCP
+servers in Kiro. On the first tool call the server opens a visible browser
+window for the MyApps → Splunk login; after that the persistent profile keeps
+re-auth silent.
 
 ## Security note
 

@@ -10,13 +10,23 @@
     "splunk": {
       "command": "node",
       "args": [
-        "dist/server.js"
+        "D:\\Users\\strumble\\dev\\splunkMCP\\dist\\server.js"
       ],
       "env": {
         "SPLUNK_BASE_URL": "https://hoopp.splunkcloud.com",
         "SPLUNK_APP": "search"
       },
       "disabled": false
+    },
+    "azure-devops": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure-devops/mcp",
+        "HOOPP"
+      ],
+      "disabled": false,
+      "autoApprove": []
     }
   }
 }
