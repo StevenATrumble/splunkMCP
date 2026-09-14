@@ -15,6 +15,11 @@
  * - 13.5: A missing required variable with no default errors and refuses to start.
  * - 13.7: `SPLUNK_USERNAME` is optional (undefined when unset).
  * - 13.8: No code path references a hardcoded username.
+ *
+ * The `SPLUNK_CDP_PORT` / `SPLUNK_CDP_HOST` variables configure the loopback
+ * remote-debugging endpoint used to attach to an already-running browser on the
+ * same profile (single-instance reuse); both apply the same env-only / default
+ * rules as every other variable above.
  */
 
 import { homedir, platform } from "node:os";
@@ -50,6 +55,19 @@ export interface Config {
   userDataDir: string;
   /** `SPLUNK_HEADFUL`; default `true` (login is always headful). */
   headful: boolean;
+  /**
+   * `SPLUNK_CDP_PORT`; default `9223`. The fixed loopback remote-debugging
+   * port the owned browser exposes so later server processes can attach to the
+   * already-running instance instead of failing on the profile lock.
+   */
+  cdpPort: number;
+  /**
+   * `SPLUNK_CDP_HOST`; default `127.0.0.1`. The host the CDP DevTools endpoint
+   * is discovered on. Kept loopback-only by default: a CDP endpoint grants full
+   * control of the authenticated browser and must never bind a routable
+   * interface.
+   */
+  cdpHost: string;
 }
 
 /**
@@ -80,6 +98,8 @@ const DEFAULTS = {
   maxWaitMs: 120000,
   autoAsyncThresholdMs: 3000,
   headful: true,
+  cdpPort: 9223,
+  cdpHost: "127.0.0.1",
 } as const;
 
 /** Environment source shape; injectable so tests need not mutate the global. */
@@ -258,5 +278,7 @@ export function loadConfig(env: EnvSource = process.env): Config {
       defaultUserDataDir(env),
     ),
     headful: readBoolean(env, "SPLUNK_HEADFUL", DEFAULTS.headful),
+    cdpPort: readPositiveInt(env, "SPLUNK_CDP_PORT", DEFAULTS.cdpPort),
+    cdpHost: readString(env, "SPLUNK_CDP_HOST", DEFAULTS.cdpHost),
   };
 }

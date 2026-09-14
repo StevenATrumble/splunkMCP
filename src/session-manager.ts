@@ -17,6 +17,21 @@
  *   implicitly and never read into server memory (task 4.2).
  * - `close()` to tear the context down.
  *
+ * Single-instance reuse: because a persistent context demands exclusive access
+ * to its `user-data-dir`, a second server process launched against the same
+ * profile would otherwise crash on the profile lock ("Opening in existing
+ * browser session"). To let multiple concurrent agents share one authenticated
+ * window, {@link SessionManager.launch} is attach-first / launch-on-miss:
+ * - The owner process launches the persistent context with a fixed loopback
+ *   remote-debugging port (`--remote-debugging-port=${config.cdpPort}`) and
+ *   writes a small `cdp-endpoint.json` handshake file into the profile dir.
+ * - A later process reads that handshake, attaches over CDP
+ *   (`chromium.connectOverCDP`) to the already-running browser, and adopts its
+ *   context/page instead of launching a second owner. It never closes the
+ *   shared browser on shutdown (ownership-aware {@link SessionManager.close}).
+ * The CDP endpoint is loopback-only and its ws URL is never logged above debug
+ * (it grants full control of the authenticated session).
+ *
  * Session probing (`probeSession`), the MyApps login flow (`promptLogin`),
  * readiness orchestration (`ensureReady`), and the serialized request queue are
  * intentionally left as clearly-marked stubs; they are implemented by later
@@ -51,9 +66,10 @@
  *   launch the browser context.
  */
 
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { platform } from "node:os";
-import type { BrowserContext, Page } from "playwright";
+import { join } from "node:path";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { chromium } from "playwright";
 
 import type { Config } from "./config.js";
@@ -122,6 +138,53 @@ const DEFAULT_LOGIN_TIMEOUT_MS = 300_000;
 const DEFAULT_LOGIN_POLL_INTERVAL_MS = 2_000;
 
 /**
+ * The handshake file written into the profile dir by the owner process,
+ * recording where the reusable browser is listening for CDP attach. Later
+ * processes read it to discover the ws endpoint (the browser's own
+ * `SingletonLock` guards the profile but does not reveal where to attach).
+ */
+const CDP_ENDPOINT_FILENAME = "cdp-endpoint.json";
+
+/** Owner-only file permission bits (`rw-------`) for the handshake file. */
+const ENDPOINT_FILE_MODE = 0o600;
+
+/**
+ * Default upper bound (ms) for a single CDP attach attempt
+ * ({@link SessionManagerDeps.connectOverCDP}). Kept short so a stale endpoint
+ * file does not stall startup before falling back to launching an owner.
+ * Injectable so tests need not wait real time.
+ */
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+
+/**
+ * Substrings identifying Playwright/Chromium's "profile already in use" launch
+ * error. When the owner launch loses the startup race to another process, the
+ * profile lock produces this error; we detect it to re-read the handshake file
+ * and attach instead (see the concurrency notes in
+ * ANALYSIS-single-instance-reuse.md).
+ */
+const PROFILE_IN_USE_MARKERS = [
+  "Opening in existing browser session",
+  "already in use",
+] as const;
+
+/**
+ * The shape of the {@link CDP_ENDPOINT_FILENAME} handshake file. `wsEndpoint`
+ * is the CDP WebSocket URL a later process attaches to; the remaining fields
+ * are diagnostic (they identify the owning process and when it started).
+ */
+export interface CdpEndpointInfo {
+  /** The CDP WebSocket endpoint URL to attach to (loopback). */
+  wsEndpoint: string;
+  /** The loopback remote-debugging port the owner launched with. */
+  port: number;
+  /** The owning process id (diagnostic; helps identify a stale file). */
+  pid: number;
+  /** ISO-8601 timestamp of when the owner wrote the file (diagnostic). */
+  startedAt: string;
+}
+
+/**
  * Raised when the persisted browser profile directory (User_Data_Dir) cannot
  * be secured to owner-only access. This aborts startup before any browser
  * context is launched, because the directory holds a live authenticated
@@ -182,12 +245,35 @@ export class MissingCsrfTokenError extends SplunkMcpError {
 /**
  * Dependency seam for the persistent-context launcher, so tests can substitute
  * a fake without importing Playwright. Mirrors the shape of
- * `chromium.launchPersistentContext`.
+ * `chromium.launchPersistentContext`. The options carry `args` so the owner
+ * launch can pass `--remote-debugging-port=<port>` and tests can assert it.
  */
 export type LaunchPersistentContext = (
   userDataDir: string,
-  options: { headless: boolean },
+  options: { headless: boolean; args?: string[] },
 ) => Promise<BrowserContext>;
+
+/**
+ * Dependency seam for attaching to an already-running browser over CDP, so
+ * tests can fake reuse without a real browser. Mirrors the shape of
+ * `chromium.connectOverCDP`.
+ */
+export type ConnectOverCdp = (endpoint: string) => Promise<Browser>;
+
+/**
+ * Injectable handshake-file accessors. Default to real filesystem operations on
+ * `${userDataDir}/cdp-endpoint.json`; overridden in tests so no real file is
+ * touched. `read` resolves `undefined` when the file is absent (never throws
+ * for a missing file); `remove` is idempotent (a missing file is not an error).
+ */
+export interface EndpointFileIo {
+  /** Read + parse the handshake file, or `undefined` if it does not exist. */
+  read: () => Promise<CdpEndpointInfo | undefined>;
+  /** Write the handshake file with owner-only permissions. */
+  write: (info: CdpEndpointInfo) => Promise<void>;
+  /** Remove the handshake file; a missing file is not an error. */
+  remove: () => Promise<void>;
+}
 
 /**
  * Injectable collaborators for {@link SessionManager}. All default to the real
@@ -199,6 +285,21 @@ export interface SessionManagerDeps {
   ensureChromium?: () => Promise<void>;
   /** Launches the persistent Chromium context. */
   launchPersistentContext?: LaunchPersistentContext;
+  /** Attaches to an already-running browser over CDP (reuse path). */
+  connectOverCDP?: ConnectOverCdp;
+  /**
+   * Handshake-file accessors for the CDP endpoint. Defaults to real filesystem
+   * operations on `${userDataDir}/cdp-endpoint.json`; injectable in tests.
+   */
+  endpointFile?: EndpointFileIo;
+  /**
+   * Resolve the CDP WebSocket endpoint from the loopback DevTools JSON endpoint
+   * (`http://<host>:<port>/json/version` → `webSocketDebuggerUrl`). Injectable
+   * and bounded; defaults to a `fetch`-based implementation. Returns
+   * `undefined` when the endpoint cannot be resolved (reuse is then skipped for
+   * this launch, but the process still serves as owner).
+   */
+  resolveWsEndpoint?: (host: string, port: number) => Promise<string | undefined>;
   /** Redaction-aware logger. */
   logger?: Logger;
   /** OS platform accessor (injectable so Windows/POSIX branches are testable). */
@@ -220,6 +321,11 @@ export interface SessionManagerDeps {
    * Defaults to {@link DEFAULT_LOGIN_POLL_INTERVAL_MS}.
    */
   loginPollIntervalMs?: number;
+  /**
+   * Upper bound (ms) for a single CDP attach attempt. Defaults to
+   * {@link DEFAULT_CONNECT_TIMEOUT_MS}; overridable in tests.
+   */
+  connectTimeoutMs?: number;
   /**
    * Monotonic clock accessor (ms). Injectable so deadline math is testable
    * without real time. Defaults to {@link Date.now}.
@@ -257,15 +363,38 @@ export class SessionManager {
   private readonly log: Logger;
   private readonly ensureChromium: () => Promise<void>;
   private readonly launchPersistentContext: LaunchPersistentContext;
+  private readonly connectOverCDP: ConnectOverCdp;
+  private readonly endpointFile: EndpointFileIo;
+  private readonly resolveWsEndpointFn: (
+    host: string,
+    port: number,
+  ) => Promise<string | undefined>;
   private readonly getPlatform: () => NodeJS.Platform;
   private readonly probeTimeoutMs: number;
   private readonly loginTimeoutMs: number;
   private readonly loginPollIntervalMs: number;
+  private readonly connectTimeoutMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
   private context: BrowserContext | undefined;
   private primaryPage: Page | undefined;
+
+  /**
+   * The attached browser connection when this instance is a *reuse* (attached)
+   * session rather than the owner. Held so {@link close} can disconnect it
+   * without closing the shared browser. Undefined on the owner path.
+   */
+  private attachedBrowser: Browser | undefined;
+
+  /**
+   * Whether this instance *owns* the browser (launched the persistent context)
+   * or is *attached* to another process's browser over CDP. Governs the
+   * ownership-aware teardown in {@link close}: the owner closes the context and
+   * removes the handshake file; an attached instance only disconnects and
+   * leaves the shared browser (and the handshake file) intact.
+   */
+  private owning = false;
 
   /**
    * FIFO queue of pending REST calls awaiting the shared page (Requirement
@@ -290,11 +419,18 @@ export class SessionManager {
       deps.launchPersistentContext ??
       ((userDataDir, options) =>
         chromium.launchPersistentContext(userDataDir, options));
+    this.connectOverCDP =
+      deps.connectOverCDP ?? ((endpoint) => chromium.connectOverCDP(endpoint));
+    this.endpointFile =
+      deps.endpointFile ?? createFsEndpointFileIo(config.userDataDir);
+    this.resolveWsEndpointFn =
+      deps.resolveWsEndpoint ?? defaultResolveWsEndpoint;
     this.getPlatform = deps.getPlatform ?? platform;
     this.probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     this.loginTimeoutMs = deps.loginTimeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS;
     this.loginPollIntervalMs =
       deps.loginPollIntervalMs ?? DEFAULT_LOGIN_POLL_INTERVAL_MS;
+    this.connectTimeoutMs = deps.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.now = deps.now ?? (() => Date.now());
     this.sleep =
       deps.sleep ??
@@ -327,31 +463,268 @@ export class SessionManager {
     // Req 17.4: never launch a context when Chromium is missing.
     await this.ensureChromium();
 
+    // Attach-first: if a reusable browser is already running on this profile,
+    // adopt it instead of trying to launch a second owner (which would crash on
+    // the profile lock). On a miss, launch and become the owner.
+    if (await this.tryAttach()) {
+      return;
+    }
+
+    await this.launchOwned();
+  }
+
+  /**
+   * The Splunk start URL the primary page is navigated to. Same-origin with
+   * `config.baseUrl` so subsequent in-page fetches (task 4.2) work.
+   */
+  private get startUrl(): string {
+    return `${this.config.baseUrl}/en-US/app/${this.config.app}/search`;
+  }
+
+  /**
+   * Attempt to attach to an already-running browser on this profile.
+   *
+   * Reads the `cdp-endpoint.json` handshake file; if it names a ws endpoint,
+   * connects over CDP (bounded by {@link connectTimeoutMs}) and adopts the
+   * existing context, reusing a page on the Splunk origin or opening one.
+   *
+   * Ownership: a successful attach sets `owning = false` so {@link close} only
+   * disconnects and never tears down the shared browser.
+   *
+   * Stale handling: if the file exists but the connect fails (the owner died
+   * without cleanup), the stale file is removed so {@link launchOwned} can take
+   * over as the fresh owner.
+   *
+   * @returns `true` when attached and ready; `false` on any miss/stale/failure
+   *   (the caller should then launch an owner).
+   */
+  private async tryAttach(): Promise<boolean> {
+    let info: CdpEndpointInfo | undefined;
+    try {
+      info = await this.endpointFile.read();
+    } catch (error) {
+      // A malformed/unreadable handshake file is treated as a miss; remove it
+      // so a fresh owner can rewrite it.
+      this.log.debug("Could not read CDP endpoint handshake; treating as miss", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.endpointFile.remove().catch(() => {
+        /* best-effort */
+      });
+      return false;
+    }
+
+    if (!info || !info.wsEndpoint) {
+      // No handshake file (or no endpoint recorded) — nobody to attach to.
+      return false;
+    }
+
+    let browser: Browser;
+    try {
+      // Do NOT log info.wsEndpoint above debug: it grants full browser control.
+      this.log.debug("Attaching to existing browser over CDP", {
+        port: info.port,
+      });
+      browser = await this.withTimeout(
+        this.connectOverCDP(info.wsEndpoint),
+        this.connectTimeoutMs,
+        "CDP attach",
+      );
+    } catch (error) {
+      // Connect failed/timed out: the recorded endpoint is stale. Remove the
+      // file and fall through to launching a fresh owner.
+      this.log.debug(
+        "CDP attach failed; treating handshake as stale and removing it",
+        { port: info.port, error: error instanceof Error ? error.message : String(error) },
+      );
+      await this.endpointFile.remove().catch(() => {
+        /* best-effort */
+      });
+      return false;
+    }
+
+    // Adopt the first available context from the attached browser (a persistent
+    // context surfaces as the browser's single context under CDP).
+    const contexts = browser.contexts();
+    const context = contexts.length > 0 ? contexts[0]! : undefined;
+    if (!context) {
+      // Nothing usable to adopt — disconnect and fall back to owning.
+      this.log.debug("Attached browser exposed no context; falling back to launch");
+      await browser.close().catch(() => {
+        /* disconnect only */
+      });
+      return false;
+    }
+
+    // Reuse an existing page already on the Splunk origin, or open/navigate one.
+    const page = await this.acquireOriginPage(context);
+
+    this.attachedBrowser = browser;
+    this.context = context;
+    this.primaryPage = page;
+    this.owning = false;
+
+    this.log.info("Attached to existing browser session", {
+      port: info.port,
+      headful: this.config.headful,
+    });
+    return true;
+  }
+
+  /**
+   * Launch a fresh persistent context and become the owner of the profile.
+   *
+   * Secures the profile dir owner-only (Req 16.1–16.4) before launching,
+   * launches with the fixed loopback remote-debugging port so later processes
+   * can attach, navigates the primary page to the Splunk origin (Req 9.1), then
+   * writes the `cdp-endpoint.json` handshake file so reuse is discoverable.
+   *
+   * Startup race: if the launch loses the profile lock to another process
+   * (Chromium's "Opening in existing browser session"), the winner should have
+   * just written the handshake file — so we re-attempt {@link tryAttach} once
+   * and only rethrow a clear error if that also fails.
+   */
+  private async launchOwned(): Promise<void> {
     // Req 16.1–16.4: create the profile dir and lock it down before launch.
     await this.prepareUserDataDir(this.config.userDataDir);
 
-    // Req 9.1: persistent context keeps the SSO session across restarts. Login
-    // is always interactive, so honor the (default true) headful setting.
-    const context = await this.launchPersistentContext(
-      this.config.userDataDir,
-      { headless: !this.config.headful },
-    );
+    // Expose a fixed loopback CDP endpoint so later processes can attach.
+    // Chromium binds --remote-debugging-port to localhost by default.
+    const args = [`--remote-debugging-port=${this.config.cdpPort}`];
+
+    let context: BrowserContext;
+    try {
+      // Req 9.1: persistent context keeps the SSO session across restarts.
+      // Login is always interactive, so honor the (default true) headful flag.
+      context = await this.launchPersistentContext(this.config.userDataDir, {
+        headless: !this.config.headful,
+        args,
+      });
+    } catch (error) {
+      if (isProfileInUseError(error)) {
+        // Lost the startup race: another process now owns the profile and
+        // (should have) written the handshake. Re-read and attach.
+        this.log.debug(
+          "Profile already in use on launch; re-attempting attach (startup race)",
+        );
+        if (await this.tryAttach()) {
+          return;
+        }
+        throw new TransportError(
+          "The browser profile is already in use by another instance, but " +
+            "attaching to it failed. Ensure only one Splunk MCP instance owns " +
+            "the profile, or that the existing instance exposes its CDP port " +
+            `(${this.config.cdpPort}), then retry.`,
+        );
+      }
+      throw error;
+    }
+
     this.context = context;
+    this.owning = true;
 
     // A persistent context opens with one page; reuse it, otherwise create one.
     const pages = context.pages();
     const page = pages.length > 0 ? pages[0]! : await context.newPage();
     this.primaryPage = page;
 
-    // Navigate the single primary page onto the Splunk origin so subsequent
-    // in-page fetches (task 4.2) are same-origin.
-    const startUrl = `${this.config.baseUrl}/en-US/app/${this.config.app}/search`;
-    await page.goto(startUrl, { waitUntil: "domcontentloaded" });
+    // Req 9.1 / task 4.1: navigate onto the Splunk origin for same-origin fetch.
+    await page.goto(this.startUrl, { waitUntil: "domcontentloaded" });
 
     this.log.info("Browser session launched", {
-      startUrl,
+      startUrl: this.startUrl,
       headful: this.config.headful,
+      cdpPort: this.config.cdpPort,
     });
+
+    // Publish the handshake so later processes can attach. Best-effort: if the
+    // ws endpoint cannot be resolved we still serve as owner, reuse just will
+    // not be available until the next launch.
+    await this.publishEndpoint(context);
+  }
+
+  /**
+   * Reuse a page already on the Splunk origin within `context`, or open/navigate
+   * one to the Splunk start URL. Used on the attach path where the shared
+   * browser may already have the authenticated page open.
+   */
+  private async acquireOriginPage(context: BrowserContext): Promise<Page> {
+    const expectedOrigin = new URL(this.config.baseUrl).origin;
+    for (const candidate of context.pages()) {
+      let origin = "";
+      try {
+        origin = new URL(candidate.url()).origin;
+      } catch {
+        origin = "";
+      }
+      if (origin === expectedOrigin) {
+        return candidate;
+      }
+    }
+    // No page on the origin — open one and navigate it there.
+    const page = await context.newPage();
+    await page.goto(this.startUrl, { waitUntil: "domcontentloaded" });
+    return page;
+  }
+
+  /**
+   * Resolve the launched browser's CDP ws endpoint and write the handshake
+   * file. Prefers the Browser's own `wsEndpoint()` when available; otherwise
+   * derives it from the loopback DevTools JSON endpoint on the configured port.
+   * Best-effort: on failure it logs at debug and returns without writing (the
+   * process still serves as owner, reuse is simply unavailable this run).
+   */
+  private async publishEndpoint(context: BrowserContext): Promise<void> {
+    let wsEndpoint: string | undefined;
+
+    const browser = context.browser();
+    // `wsEndpoint()` is not on Playwright's `Browser` type for a persistent
+    // context (and is typically undefined there), so probe it defensively.
+    const wsEndpointFn = (
+      browser as { wsEndpoint?: () => string } | null
+    )?.wsEndpoint;
+    const direct = typeof wsEndpointFn === "function" ? wsEndpointFn.call(browser) : undefined;
+    if (typeof direct === "string" && direct.length > 0) {
+      wsEndpoint = direct;
+    } else {
+      try {
+        wsEndpoint = await this.resolveWsEndpointFn(
+          this.config.cdpHost,
+          this.config.cdpPort,
+        );
+      } catch (error) {
+        this.log.debug("Failed to resolve CDP ws endpoint; reuse unavailable", {
+          port: this.config.cdpPort,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+    }
+
+    if (!wsEndpoint) {
+      this.log.debug(
+        "Could not determine CDP ws endpoint; skipping handshake (reuse unavailable)",
+        { port: this.config.cdpPort },
+      );
+      return;
+    }
+
+    try {
+      await this.endpointFile.write({
+        wsEndpoint,
+        port: this.config.cdpPort,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      });
+      this.log.debug("Published CDP endpoint handshake for reuse", {
+        port: this.config.cdpPort,
+      });
+    } catch (error) {
+      // Not fatal: we simply will not be reusable this run.
+      this.log.debug("Failed to write CDP endpoint handshake", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -430,22 +803,51 @@ export class SessionManager {
    */
   async close(): Promise<void> {
     const context = this.context;
+    const attachedBrowser = this.attachedBrowser;
+    const owning = this.owning;
     this.context = undefined;
     this.primaryPage = undefined;
+    this.attachedBrowser = undefined;
+    this.owning = false;
 
     // Req 18.3: the shared page is going away. Fail every queued call with a
     // transport error rather than leaving callers pending indefinitely. The
-    // in-flight call (if any) races the context close and will settle on its
-    // own via the pump; only calls that have not yet started are drained here.
+    // in-flight call (if any) races the teardown and will settle on its own via
+    // the pump; only calls that have not yet started are drained here.
     this.drainQueue(
       new TransportError(
         "Browser session is closing; the pending REST call was not executed.",
       ),
     );
 
-    if (context) {
-      await context.close();
-      this.log.info("Browser session closed");
+    if (owning) {
+      // Owner: close the context (kills the browser we launched) and remove the
+      // handshake file so no later process attaches to a dead endpoint.
+      if (context) {
+        await context.close();
+      }
+      await this.endpointFile.remove().catch((error: unknown) => {
+        this.log.debug("Failed to remove CDP endpoint handshake on close", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      if (context) {
+        this.log.info("Browser session closed (owner)");
+      }
+      return;
+    }
+
+    // Attached (reuse) session: DISCONNECT only. Closing the CDP-connected
+    // Browser detaches this process without terminating the shared browser that
+    // the owner still relies on. Never call context.close() here — that would
+    // tear the profile out from under the owner. Leave the handshake intact.
+    if (attachedBrowser) {
+      await attachedBrowser.close().catch((error: unknown) => {
+        this.log.debug("Error disconnecting attached CDP browser on close", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      this.log.info("Detached from shared browser session (attached)");
     }
   }
 
@@ -988,6 +1390,87 @@ export class SessionManager {
       json,
       isLoginRedirect,
     };
+  }
+}
+
+/**
+ * Detect Playwright/Chromium's "profile already in use" launch failure. Used to
+ * recognize losing the startup race so we re-attach instead of crashing.
+ */
+function isProfileInUseError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return PROFILE_IN_USE_MARKERS.some((marker) => message.includes(marker));
+}
+
+/**
+ * Build the default filesystem-backed {@link EndpointFileIo} for a profile dir.
+ * The handshake lives at `${userDataDir}/cdp-endpoint.json`; it is written with
+ * owner-only permissions and inherits the profile dir's restricted access.
+ */
+function createFsEndpointFileIo(userDataDir: string): EndpointFileIo {
+  const path = join(userDataDir, CDP_ENDPOINT_FILENAME);
+  return {
+    read: async () => {
+      let raw: string;
+      try {
+        raw = await readFile(path, "utf8");
+      } catch (error) {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          (error as { code?: string }).code === "ENOENT"
+        ) {
+          return undefined;
+        }
+        throw error;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        typeof (parsed as { wsEndpoint?: unknown }).wsEndpoint !== "string"
+      ) {
+        // Malformed content is treated as absent by the caller.
+        throw new Error("CDP endpoint handshake file is malformed.");
+      }
+      return parsed as CdpEndpointInfo;
+    },
+    write: async (info) => {
+      await writeFile(path, JSON.stringify(info), { mode: ENDPOINT_FILE_MODE });
+    },
+    remove: async () => {
+      await rm(path, { force: true });
+    },
+  };
+}
+
+/**
+ * Default {@link SessionManagerDeps.resolveWsEndpoint}: read the CDP ws URL from
+ * the loopback DevTools JSON endpoint (`http://<host>:<port>/json/version`,
+ * field `webSocketDebuggerUrl`). Bounded by a short abort timeout so a
+ * non-responsive port does not stall startup. Returns `undefined` on any
+ * failure (the caller then skips publishing the handshake).
+ */
+async function defaultResolveWsEndpoint(
+  host: string,
+  port: number,
+): Promise<string | undefined> {
+  const url = `http://${host}:${port}/json/version`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_000);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) {
+      return undefined;
+    }
+    const body = (await resp.json()) as { webSocketDebuggerUrl?: unknown };
+    const ws = body.webSocketDebuggerUrl;
+    return typeof ws === "string" && ws.length > 0 ? ws : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

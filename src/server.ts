@@ -126,9 +126,25 @@ export async function main(): Promise<void> {
   try {
     await session.launch();
   } catch (error) {
-    logger.error("Failed to launch the browser session; refusing to start.", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    if (isSingleInstanceOrPortIssue(message)) {
+      // launch() is attach-first: reaching here means the profile is busy AND
+      // the running instance was not attachable (its CDP endpoint was missing,
+      // stale, or the configured port conflicts). Give actionable guidance
+      // rather than a generic launch failure.
+      logger.error(
+        "Could not start: the browser profile is already in use by another " +
+          "instance and attaching to it failed. Only one Splunk MCP instance " +
+          "can own the profile at a time. Reconnect to the existing instance, " +
+          "stop it, or (if the CDP port is taken by an unrelated process) set " +
+          "SPLUNK_CDP_PORT to a free port, then retry.",
+        { reason: message, cdpPort: config.cdpPort },
+      );
+    } else {
+      logger.error("Failed to launch the browser session; refusing to start.", {
+        error: message,
+      });
+    }
     // Best-effort cleanup of any partially-created context.
     await session.close().catch(() => {
       /* ignore secondary teardown failures */
@@ -201,6 +217,24 @@ function installShutdownHandlers(
       error: error instanceof Error ? error.message : String(error),
     });
   });
+}
+
+/**
+ * Heuristic: does a launch-failure message indicate the single-instance /
+ * profile-lock / CDP-port-conflict class of problem (as opposed to some other
+ * launch error)? `launch()` attaches-first, so the profile-in-use text only
+ * survives here when re-attach also failed. We also match the wording of the
+ * typed error `launch()` raises in that case, and generic port-conflict text.
+ */
+function isSingleInstanceOrPortIssue(message: string): boolean {
+  const markers = [
+    "already in use",
+    "Opening in existing browser session",
+    "attaching to it failed",
+    "EADDRINUSE",
+    "address already in use",
+  ];
+  return markers.some((marker) => message.includes(marker));
 }
 
 /**

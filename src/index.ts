@@ -70,9 +70,14 @@ export type { LogLevel, LogContext, LoggerOptions } from "./log.js";
 
 export { SessionManager, UserDataDirPermissionError } from "./session-manager.js";
 
+export { MissingCsrfTokenError } from "./session-manager.js";
+
 export type {
   SessionManagerDeps,
   LaunchPersistentContext,
+  ConnectOverCdp,
+  EndpointFileIo,
+  CdpEndpointInfo,
 } from "./session-manager.js";
 
 export {
